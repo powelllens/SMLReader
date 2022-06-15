@@ -4,11 +4,13 @@
 #include <sml/sml_file.h>
 #include "Sensor.h"
 #include <IotWebConf.h>
-#include "MqttPublisher.h"
 #include "EEPROM.h"
 #include <ESP8266WiFi.h>
 
-std::list<Sensor*> *sensors = new std::list<Sensor*>();
+IotWebConfHtmlFormatProvider htmlFormatProviderInstance;
+IotWebConfHtmlFormatProvider *htmlFormatProvider = &htmlFormatProviderInstance;
+
+std::list<Sensor *> *sensors = new std::list<Sensor *>();
 
 void wifiConnected();
 void configSaved();
@@ -18,32 +20,113 @@ WebServer server(80);
 HTTPUpdateServer httpUpdater;
 WiFiClient net;
 
-MqttConfig mqttConfig;
-MqttPublisher publisher;
-
 IotWebConf iotWebConf(WIFI_AP_SSID, &dnsServer, &server, WIFI_AP_DEFAULT_PASSWORD, CONFIG_VERSION);
-IotWebConfParameter params[] = {
-	IotWebConfParameter("MQTT server", "mqttServer", mqttConfig.server, sizeof(mqttConfig.server), "text", NULL, mqttConfig.server, NULL, true),
-	IotWebConfParameter("MQTT port", "mqttPort", mqttConfig.port, sizeof(mqttConfig.port), "text", NULL, mqttConfig.port, NULL, true),
-	IotWebConfParameter("MQTT username", "mqttUsername", mqttConfig.username, sizeof(mqttConfig.username), "text", NULL, mqttConfig.username, NULL, true),
-	IotWebConfParameter("MQTT password", "mqttPassword", mqttConfig.password, sizeof(mqttConfig.password), "password", NULL, mqttConfig.password, NULL, true),
-	IotWebConfParameter("MQTT topic", "mqttTopic", mqttConfig.topic, sizeof(mqttConfig.topic), "text", NULL, mqttConfig.topic, NULL, true)};
-
 boolean needReset = false;
 boolean connected = false;
 
+String currentpower;
+
+double energy_1_8_0;
+double energy_1_8_0_old;
+
+double energy_2_8_0;
+double energy_2_8_0_old;
+
+int PowerPositiv;
 
 void process_message(byte *buffer, size_t len, Sensor *sensor)
 {
 	// Parse
 	sml_file *file = sml_file_parse(buffer + 8, len - 16);
 
-	DEBUG_SML_FILE(file);
+	for (int i = 0; i < file->messages_len; i++)
+	{
+		sml_message *message = file->messages[i];
+		if (*message->message_body->tag == SML_MESSAGE_GET_LIST_RESPONSE)
+		{
+			sml_list *entry;
+			sml_get_list_response *body;
+			body = (sml_get_list_response *)message->message_body->data;
+			for (entry = body->val_list; entry != NULL; entry = entry->next)
+			{
+				if (!entry->value)
+				{ // do not crash on null value
+					continue;
+				}
+				if (entry->value->type == SML_TYPE_OCTET_STRING)
+				{
+					continue;
+				}
+				else if (entry->value->type == SML_TYPE_BOOLEAN)
+				{
+					continue;
+				}
+				else if (((entry->value->type & SML_TYPE_FIELD) == SML_TYPE_INTEGER) ||
+						 ((entry->value->type & SML_TYPE_FIELD) == SML_TYPE_UNSIGNED))
+				{
+					char buffer[255];
+					double value = sml_value_to_double(entry->value);
+					int scaler = (entry->scaler) ? *entry->scaler : 0;
+					int prec = -scaler;
+					if (prec < 0)
+						prec = 0;
+					value = value * pow(10, scaler);
+					if ((int(entry->obj_name->str[2]) == 1) && (int(entry->obj_name->str[3]) == 8) && (int(entry->obj_name->str[4]) == 0))
+					{
+						energy_1_8_0 = value;
+						if (energy_1_8_0_old != 0)
+						{
+							if (energy_1_8_0 > energy_1_8_0_old)
+							{
+								PowerPositiv = 1;
+							}
+						}
+						energy_1_8_0_old = energy_1_8_0;
+					}
+					if ((int(entry->obj_name->str[2]) == 2) && (int(entry->obj_name->str[3]) == 8) && (int(entry->obj_name->str[4]) == 0))
+					{
+						energy_2_8_0 = value;
+						if (energy_2_8_0_old != 0)
+						{
+							if (energy_2_8_0 > energy_2_8_0_old)
+							{
+								PowerPositiv = -1;
+							}
+						}
+						energy_2_8_0_old = energy_2_8_0;
+					}
+					if ((int(entry->obj_name->str[2]) == 15) && (int(entry->obj_name->str[3]) == 7) && (int(entry->obj_name->str[4]) == 0))
+					{
+						value = value * PowerPositiv;
+						sprintf(buffer, "%.*f", prec, value);
+						currentpower = String(buffer);
+					}
+				}
+			}
+		}
+	}
 
-	publisher.publish(sensor, file);
+	DEBUG_SML_FILE(file);
 
 	// free the malloc'd memory
 	sml_file_free(file);
+}
+
+void json_sml_data()
+{
+	server.sendHeader("Access-Control-Allow-Origin", "*");
+	/* 	129-129:199.130.3*255#EMH#
+		1-0:0.0.9*255#08 0c 2a ec 2d 4c 53 6e #
+
+		1-0:1.8.0*255#38972866.7#Wh
+		1-0:2.8.0*255#25010290.9#Wh
+		1-0:1.8.1*255#38972866.7#Wh
+		1-0:2.8.1*255#25010290.9#Wh
+		1-0:1.8.2*255#0.0#Wh
+		1-0:15.7.0*255#306.1#W
+	 */
+
+	server.send(200, "application/json", "{\"Power\": \"" + currentpower + "\"}");
 }
 
 void setup()
@@ -58,7 +141,7 @@ void setup()
 
 	// Setup reading heads
 	DEBUG("Setting up %d configured sensors...", NUM_OF_SENSORS);
-	const SensorConfig *config  = SENSOR_CONFIGS;
+	const SensorConfig *config = SENSOR_CONFIGS;
 	for (uint8_t i = 0; i < NUM_OF_SENSORS; i++, config++)
 	{
 		Sensor *sensor = new Sensor(config, process_message);
@@ -70,11 +153,6 @@ void setup()
 	// Setup WiFi and config stuff
 	DEBUG("Setting up WiFi and config stuff.");
 
-	for (uint8_t i = 0; i < sizeof(params) / sizeof(params[0]); i++)
-	{
-		DEBUG("Adding parameter %s.", params[i].label);
-		iotWebConf.addParameter(&params[i]);
-	}
 	iotWebConf.setConfigSavedCallback(&configSaved);
 	iotWebConf.setWifiConnectionCallback(&wifiConnected);
 	iotWebConf.setupUpdateServer(&httpUpdater);
@@ -83,22 +161,13 @@ void setup()
 	if (!validConfig)
 	{
 		DEBUG("Missing or invalid config. MQTT publisher disabled.");
-		MqttConfig defaults;
-		// Resetting to default values
-		strcpy(mqttConfig.server, defaults.server);
-		strcpy(mqttConfig.port, defaults.port);
-		strcpy(mqttConfig.username, defaults.username);
-		strcpy(mqttConfig.password, defaults.password);
-		strcpy(mqttConfig.topic, defaults.topic);
 	}
-	else
-	{
-		// Setup MQTT publisher
-		publisher.setup(mqttConfig);
-	}
-
-	server.on("/", [] { iotWebConf.handleConfig(); });
-	server.onNotFound([]() { iotWebConf.handleNotFound(); });
+	server.on("/", []
+			  { iotWebConf.handleConfig(); });
+	server.on("/api/data/json", []
+			  { json_sml_data(); });
+	server.onNotFound([]()
+					  { iotWebConf.handleNotFound(); });
 
 	DEBUG("Setup done.");
 }
@@ -114,7 +183,8 @@ void loop()
 	}
 
 	// Execute sensor state machines
-	for (std::list<Sensor*>::iterator it = sensors->begin(); it != sensors->end(); ++it){
+	for (std::list<Sensor *>::iterator it = sensors->begin(); it != sensors->end(); ++it)
+	{
 		(*it)->loop();
 	}
 	iotWebConf.doLoop();
@@ -131,5 +201,4 @@ void wifiConnected()
 {
 	DEBUG("WiFi connection established.");
 	connected = true;
-	publisher.connect();
 }
