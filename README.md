@@ -1,31 +1,41 @@
 # SMLReader
 
-An ESP8266 based smart meter (SML) to MQTT gateway 
+An ESP8266 based smart meter (SML) to HTTP->JSON
+Main Purpose is an easy access for EVCC to read the Smart Meter Grid
 
 ## About
 
-The aim of this project is to read the meter readings of modern energy meters and make them available via MQTT.
+The aim of this project is to read the meter readings of modern energy meters and make them available via HTTP.
 
 The software was primarily developed and tested for the EMH ED300L electricity meter, but should also work with other energy meters that have an optical interface and communicate via the SML protocol.
 
-SMLReader publishes the metrics read from the meter's optical unit to an MQTT broker configured via the provided web interface.
+SMLReader publishes the metrics read from the meter's optical unit to an HTTP Site in a JSON format for easiest readout for EVCC Charger.
 
 If you like this project, you might consider to [support me](#donate).
 
-### Screenshots
-![WiFi and MQTT setup](doc/screenshots/screenshot_setup.png)
-![Grafana](doc/screenshots/screenshot_grafana.png)
-```bash
-MB-Monty ➜  ~  mosquitto_sub -h 10.4.32.103 -v -t smartmeter/mains/#
-smartmeter/mains/info Hello from 00C7551E, running SMLReader version 2.1.5.
-smartmeter/mains/sensor/1/obis/1-0:1.8.0/255/value 3546245.9
-smartmeter/mains/sensor/1/obis/1-0:2.8.0/255/value 13.2
-smartmeter/mains/sensor/1/obis/1-0:1.8.1/255/value 0.0
-smartmeter/mains/sensor/1/obis/1-0:2.8.1/255/value 13.2
-smartmeter/mains/sensor/1/obis/1-0:1.8.2/255/value 3546245.9
-smartmeter/mains/sensor/1/obis/1-0:2.8.2/255/value 0.0
-smartmeter/mains/sensor/1/obis/1-0:16.7.0/255/value 451.2
-```
+## EVCC Config
+
+The following config will connect to the Meter and collect the actual Grid Power.
+
+´´´
+meters:
+  - name: grid1
+    type: custom
+    power: # Leistung (W)
+      source: http
+      uri: http://192.168.XXX.XXX/api/data/json
+      method: GET # default HTTP method
+      headers:
+      - content-type: application/json
+      auth: # basic authorization
+        type: basic
+        user: admin
+        password: <Password>
+      insecure: true # set to true to trust self-signed certificates
+      jq: .Power # parse response json
+      scale: 1 # floating point factor applied to result, e.g. for kW to W conversion
+      timeout: 5s # timeout in golang duration format, see https://golang.org/pkg/time/#ParseDuration
+´´´
 
 ### Hardware
 
@@ -43,18 +53,13 @@ The phototransistor has been fixed with hot glue within the housing.
 ![Reading Head](doc/assets/SMLReader_Img_ReadingHead.jpg "Reading Head") ![Reading Head](doc/assets/SMLReader_Img_ReadingHead_Close.jpg "Reading Head") ![D1](doc/assets/SMLReader_Img_D1.jpg "WeMos D1 mini")
 
 #### Schematic diagram
+
 ![Schematic diagram](doc/assets/SMLReader_Schema.png)
 
 ## Getting started
 
 To get started, the software must first somehow get onto the device. 
 This can be done in several ways.
-
-### Uploading a precompiled binary
-
-A precompiled binary for the Wemos D1 and configured to have a sensor attached to pin D2 can be downloaded from the releases page on GitHub:  
-
-[https://github.com/mruettgers/SMLReader/releases](https://github.com/mruettgers/SMLReader/releases)
 
 #### Flashing
 
@@ -71,38 +76,6 @@ docker run -it --device /dev/ttyUSB0 -v $(pwd):/src --rm mruettgers/esptool --po
 ```
 
 The device path and the path to the binary have to be adjusted to fit your needs.
-
-
-##### Example
-
-```bash
-nb-ubuntu ➜  ~/Downloads  ls SMLReader_D1mini_v2.1.3.bin                                                                                                         
-SMLReader_D1mini_v2.1.3.bin
-
-nb-ubuntu ➜  ~/Downloads  docker run -it --device=/dev/ttyUSB0 -v $(pwd):/src --rm mruettgers/esptool --port /dev/ttyUSB0 write_flash -fm dout 0x00000 /src/SMLReader_D1mini_v2.1.3.bin
-esptool.py v2.8
-Serial port /dev/ttyUSB0
-Connecting....
-Detecting chip type... ESP8266
-Chip is ESP8266EX
-Features: WiFi
-Crystal is 26MHz
-MAC: d8:f1:5b:07:0d:eb
-Uploading stub...
-Running stub...
-Stub running...
-Configuring flash size...
-Auto-detected Flash size: 4MB
-Flash params set to 0x0340
-Compressed 378528 bytes to 266738...
-Wrote 378528 bytes (266738 compressed) at 0x00000000 in 23.6 seconds (effective 128.1 kbit/s)...
-Hash of data verified.
-
-Leaving...
-Hard resetting via RTS pin...
-```
-
----
 
 ### Using your IDE for building and flashing
 
@@ -167,44 +140,15 @@ UserSideException: Please install Git client from https://git-scm.com/downloads:
 
 ### Running
 
-WiFi and MQTT are configured via the web interface provided by [IotWebConf](https://github.com/prampec/IotWebConf) and which can be reached after joining the WiFi network named SMLReader and heading to http://192.168.4.1.   
+WiFi is configured via the web interface provided by [IotWebConf](https://github.com/prampec/IotWebConf) and which can be reached after joining the WiFi network named SMLReader and heading to http://192.168.4.1.   
 If the device has already been configured, the web interface can be reached via the IP address obtained from your local network's DHCP server.
 To login provide the user `admin` and the configured AP password.
 
 *Attention: You have to change the AP Password (empty by default), otherwise SMLReader won't work.*
 
-If everything is configured properly and running with a sensor in place, SMLReader will publish the metrics and values received from the meter to the configured MQTT broker:
-
-```
-MB-Monty ➜  ~  mosquitto_sub -h 10.4.32.103 -v -t smartmeter/mains/#
-smartmeter/mains/info Hello from 00C7551E, running SMLReader version 2.1.5.
-smartmeter/mains/sensor/1/obis/1-0:1.8.0/255/value 3546245.9
-smartmeter/mains/sensor/1/obis/1-0:2.8.0/255/value 13.2
-smartmeter/mains/sensor/1/obis/1-0:1.8.1/255/value 0.0
-smartmeter/mains/sensor/1/obis/1-0:2.8.1/255/value 13.2
-smartmeter/mains/sensor/1/obis/1-0:1.8.2/255/value 3546245.9
-smartmeter/mains/sensor/1/obis/1-0:2.8.2/255/value 0.0
-smartmeter/mains/sensor/1/obis/1-0:16.7.0/255/value 451.2
-
-smartmeter/mains/sensor/2/obis/1-0:1.8.0/255/value 3546245.9
-smartmeter/mains/sensor/2/obis/1-0:2.8.0/255/value 13.2
-smartmeter/mains/sensor/2/obis/1-0:1.8.1/255/value 0.0
-smartmeter/mains/sensor/2/obis/1-0:2.8.1/255/value 13.2
-smartmeter/mains/sensor/2/obis/1-0:1.8.2/255/value 3546245.9
-smartmeter/mains/sensor/2/obis/1-0:2.8.2/255/value 0.0
-smartmeter/mains/sensor/2/obis/1-0:16.7.0/255/value 451.2
-
-smartmeter/mains/sensor/3/obis/1-0:1.8.0/255/value 3546245.9
-smartmeter/mains/sensor/3/obis/1-0:2.8.0/255/value 13.2
-smartmeter/mains/sensor/3/obis/1-0:1.8.1/255/value 0.0
-smartmeter/mains/sensor/3/obis/1-0:2.8.1/255/value 13.2
-smartmeter/mains/sensor/3/obis/1-0:1.8.2/255/value 3546245.9
-smartmeter/mains/sensor/3/obis/1-0:2.8.2/255/value 0.0
-smartmeter/mains/sensor/3/obis/1-0:16.7.0/255/value 451.2
-```
+If everything is configured properly and running with a sensor in place, SMLReader will publish the metrics and values received from the meter to http:
 
 ---
-
 
 ### Debugging
 
@@ -239,19 +183,9 @@ State changed from: 0 to 1
 ...
 ```
 
-Or the dockerized way:
-
-```bash
-docker run -it --device /dev/ttyUSB0 -v $(pwd):/src --rm mruettgers/esptool ash -c "miniterm.py /dev/ttyUSB0 115200"
-```
-
-
-
 ##### PlatformIO
 
 ![PlatformIO Monitor](doc/screenshots/screenshot_platformio_upload_and_monitor.png)
-
-
 
 ---
 
@@ -272,22 +206,6 @@ docker run -it --device /dev/ttyUSB0 -v $(pwd):/src --rm mruettgers/esptool ash 
 * https://www.photovoltaikforum.com/thread/78798-sml-pr%C3%BCfsummenberechnung-ich-verzweifle-an-crc/ (Helped me to finally solve some weird CRC calculation issues before switching over to libSML)
 * http://www.stefan-weigert.de/php_loader/sml.php (Sources of the 3D-printed housing of the reading head)
 * https://github.com/gemu2015/Sonoff-Tasmota (Gemu's excellent Tasmota version with SML support)
-
-## Donate
-
-### Paypal
-[![Paypal](https://www.paypalobjects.com/en_US/DK/i/btn/btn_donateCC_LG.gif)](https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=GK95YZCEGJT84)
-
-## Roadmap
-
-* [ ] Use LITTLEFS for config storage
-* [ ] New configuration GUI based on Preact
-* [ ] Configuration of sensors via web interface
-* [ ] Add list of devices that are known to work
-* [ ] Support for ASCII based SML messages (also known as "SML in Textform")
-* [ ] Deep sleep for battery powered devices
-* [ ] Grafana / InfluxDB tutorial based on docker
-* [ ] KNX support for sending readings via an IP gateway to the bus
 
 ## License
 
