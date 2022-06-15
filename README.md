@@ -17,7 +17,7 @@ If you like this project, you might consider to [support me](#donate).
 
 The following config will connect to the Meter and collect the actual Grid Power.
 
-´´´
+```
 meters:
   - name: grid1
     type: custom
@@ -35,7 +35,7 @@ meters:
       jq: .Power # parse response json
       scale: 1 # floating point factor applied to result, e.g. for kW to W conversion
       timeout: 5s # timeout in golang duration format, see https://golang.org/pkg/time/#ParseDuration
-´´´
+```
 
 ### Hardware
 
