@@ -14,6 +14,7 @@ std::list<Sensor *> *sensors = new std::list<Sensor *>();
 
 void wifiConnected();
 void configSaved();
+void checkTimeout();
 
 DNSServer dnsServer;
 WebServer server(80);
@@ -33,6 +34,9 @@ double energy_2_8_0;
 double energy_2_8_0_old;
 
 int PowerPositiv;
+
+#define AquireyTimeoutms 120000		  // 5min
+unsigned long GlobalDataAquiredTimer; // Watchdog timer to Reset SMLReader if no data have been aquired for 2 min
 
 void process_message(byte *buffer, size_t len, Sensor *sensor)
 {
@@ -127,6 +131,9 @@ void json_sml_data()
 	 */
 
 	server.send(200, "application/json", "{\"Power\": \"" + currentpower + "\"}");
+
+	// Reset Timer
+	GlobalDataAquiredTimer = millis();
 }
 
 void setup()
@@ -170,10 +177,17 @@ void setup()
 					  { iotWebConf.handleNotFound(); });
 
 	DEBUG("Setup done.");
+
+	GlobalDataAquiredTimer = millis();
+
+	ESP.wdtEnable(5000);
 }
 
 void loop()
 {
+	ESP.wdtFeed();
+	checkTimeout();
+
 	if (needReset)
 	{
 		// Doing a chip reset caused by config changes
@@ -201,4 +215,12 @@ void wifiConnected()
 {
 	DEBUG("WiFi connection established.");
 	connected = true;
+}
+
+void checkTimeout()
+{
+	if ((millis() - GlobalDataAquiredTimer) > AquireyTimeoutms)
+	{
+		needReset = true;
+	}
 }
